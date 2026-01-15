@@ -1,17 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>The Shadowalker - Model Y Mileage</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
-    button { background: #cc0000; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f9f9f9;
+      color: #333;
+    }
+    h1, h2 { color: #cc0000; }
+    button {
+      background: #cc0000;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
     button:hover { background: #a80000; }
-    #mileage-section { background: #f8f8f8; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    #mileage-section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin: 20px 0;
+    }
+    #mileage { font-weight: bold; font-size: 1.5em; }
   </style>
 </head>
 <body>
+
   <h1>The Shadowalker</h1>
   <p>Welcome to my personal site — tracking my Tesla Model Y mileage live via the Fleet API.</p>
 
@@ -22,34 +46,35 @@
   </div>
 
   <script>
-    // Check if token is expired (5 min buffer)
+    // Helper: token near expiry?
     function isTokenExpired() {
       const expires = localStorage.getItem('tesla_token_expires');
-      return !expires || Date.now() > parseInt(expires) - 300000;
+      return !expires || Date.now() > parseInt(expires, 10) - 300000; // 5 min buffer
     }
 
     // Refresh token via Worker
     async function refreshAccessToken() {
-      const refreshToken = localStorage.getItem('tesla_refresh_token');
-      if (!refreshToken) throw new Error('No refresh token');
+      const rt = localStorage.getItem('tesla_refresh_token');
+      if (!rt) throw new Error('No refresh token');
 
       const res = await fetch('https://tesla-callback.theshadowalker.com/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken })
+        body: JSON.stringify({ refresh_token: rt })
       });
 
       if (!res.ok) throw new Error(`Refresh failed: ${res.status}`);
 
       const tokens = await res.json();
+
       localStorage.setItem('tesla_access_token', tokens.access_token);
-      localStorage.setItem('tesla_refresh_token', tokens.refresh_token || refreshToken);
+      localStorage.setItem('tesla_refresh_token', tokens.refresh_token || rt);
       localStorage.setItem('tesla_token_expires', Date.now() + tokens.expires_in * 1000);
 
       return tokens.access_token;
     }
 
-    // Fetch mileage using Worker proxy
+    // Fetch mileage using Worker proxy (fixes CORS)
     async function fetchMileage() {
       let token = localStorage.getItem('tesla_access_token');
       const el = document.getElementById('mileage');
@@ -59,12 +84,12 @@
         return;
       }
 
-      // Refresh if needed
       if (isTokenExpired()) {
         try {
           token = await refreshAccessToken();
         } catch (e) {
-          el.textContent = 'Session expired - reconnect';
+          console.error('Refresh failed:', e);
+          el.textContent = 'Session expired - please reconnect';
           localStorage.clear();
           return;
         }
@@ -73,34 +98,34 @@
       try {
         el.textContent = 'Fetching...';
 
-        const vehiclesRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
+        const vRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
           headers: { 'x-access-token': token }
         });
 
-        if (!vehiclesRes.ok) throw new Error(`API error: ${vehiclesRes.status}`);
+        if (!vRes.ok) throw new Error(`Vehicles API: ${vRes.status}`);
 
-        const vehicles = await vehiclesRes.json();
-        const vehicleId = vehicles.response[0]?.id;
+        const vehicles = await vRes.json();
+        const vid = vehicles.response?.[0]?.id;
 
-        if (!vehicleId) throw new Error('No vehicle found');
+        if (!vid) throw new Error('No vehicle found');
 
-        const dataRes = await fetch(`https://tesla-callback.theshadowalker.com/api/tesla/vehicles/${vehicleId}/vehicle_data`, {
+        const dRes = await fetch(`https://tesla-callback.theshadowalker.com/api/tesla/vehicles/${vid}/vehicle_data`, {
           headers: { 'x-access-token': token }
         });
 
-        if (!dataRes.ok) throw new Error(`Data error: ${dataRes.status}`);
+        if (!dRes.ok) throw new Error(`Data API: ${dRes.status}`);
 
-        const data = await dataRes.json();
+        const data = await dRes.json();
         const miles = data.response.vehicle_state.odometer;
 
         el.textContent = `${miles.toFixed(1)} miles`;
       } catch (err) {
-        console.error(err);
+        console.error('Mileage error:', err);
         el.textContent = 'Error loading mileage';
       }
     }
 
-    // Handle tokens from redirect
+    // Handle tokens from OAuth redirect
     window.addEventListener('load', () => {
       if (window.location.hash) {
         const params = new URLSearchParams(window.location.hash.slice(1));
@@ -109,19 +134,21 @@
           localStorage.setItem('tesla_access_token', access);
           localStorage.setItem('tesla_refresh_token', params.get('refresh_token'));
           localStorage.setItem('tesla_token_expires', Date.now() + parseInt(params.get('expires_in') || 28800) * 1000);
+
           history.replaceState(null, null, window.location.pathname);
           fetchMileage();
         }
       }
-      if (localStorage.getItem('tesla_access_token')) fetchMileage();
+
+      if (localStorage.getItem('tesla_access_token')) {
+        fetchMileage();
+      } else {
+        document.getElementById('mileage').textContent = 'Not connected yet';
+      }
     });
 
-    // Connect button
     function connectTesla() {
-      const authUrl = `https://auth.tesla.com/oauth2/v3/authorize?` +
-        `client_id=0ab7596a-006e-48d4-9b04-b165eb1ff29f&` +
-        `redirect_uri=https://tesla-callback.theshadowalker.com/tesla-callback&` +
-        `response_type=code&scope=vehicle_device_data%20offline_access&state=test123`;
+      const authUrl = `https://auth.tesla.com/oauth2/v3/authorize?client_id=0ab7596a-006e-48d4-9b04-b165eb1ff29f&redirect_uri=https://tesla-callback.theshadowalker.com/tesla-callback&response_type=code&scope=vehicle_device_data%20offline_access&state=test123`;
       window.location.href = authUrl;
     }
   </script>
