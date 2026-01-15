@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Shadowalker - Model Y Mileage</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
-    button { background: #cc0000; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; }
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f9f9f9; color: #333; }
+    h1, h2 { color: #cc0000; }
+    button { background: #cc0000; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
     button:hover { background: #a80000; }
+    #mileage-section { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin: 20px 0; }
     #mileage { font-weight: bold; font-size: 1.5em; }
   </style>
 </head>
@@ -15,19 +17,94 @@
   <h1>The Shadowalker</h1>
   <p>Welcome to my personal site — tracking my Tesla Model Y mileage live via the Fleet API.</p>
 
-  <h2>My Model Y Mileage</h2>
-  <p>Current odometer reading: <span id="mileage">Loading...</span></p>
-  <button onclick="connectTesla()">Connect / Reconnect Tesla</button>
+  <div id="mileage-section">
+    <h2>My Model Y Mileage</h2>
+    <p>Current odometer reading: <span id="mileage">Loading...</span></p>
+    <button onclick="connectTesla()">Connect / Reconnect Tesla</button>
+  </div>
 
   <script>
-    function connectTesla() {
-      const authUrl = `https://auth.tesla.com/oauth2/v3/authorize?` +
-        `client_id=0ab7596a-006e-48d4-9b04-b165eb1ff29f&` +
-        `redirect_uri=https://tesla-callback.theshadowalker.com/tesla-callback&` +
-        `response_type=code&scope=vehicle_device_data%20offline_access&state=test123`;
-      window.location.href = authUrl;
+    // Check if token is expired (5 min buffer)
+    function isTokenExpired() {
+      const expires = localStorage.getItem('tesla_token_expires');
+      return !expires || Date.now() > parseInt(expires, 10) - 300000;
     }
 
+    // Refresh token via Worker
+    async function refreshAccessToken() {
+      const rt = localStorage.getItem('tesla_refresh_token');
+      if (!rt) throw new Error('No refresh token');
+
+      const res = await fetch('https://tesla-callback.theshadowalker.com/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: rt })
+      });
+
+      if (!res.ok) throw new Error(`Refresh failed: ${res.status}`);
+
+      const tokens = await res.json();
+
+      localStorage.setItem('tesla_access_token', tokens.access_token);
+      localStorage.setItem('tesla_refresh_token', tokens.refresh_token || rt);
+      localStorage.setItem('tesla_token_expires', Date.now() + tokens.expires_in * 1000);
+
+      return tokens.access_token;
+    }
+
+    // Fetch mileage via Worker proxy
+    async function fetchMileage() {
+      let token = localStorage.getItem('tesla_access_token');
+      const el = document.getElementById('mileage');
+
+      if (!token) {
+        el.textContent = 'Not connected';
+        return;
+      }
+
+      if (isTokenExpired()) {
+        try {
+          token = await refreshAccessToken();
+        } catch (e) {
+          console.error('Refresh failed:', e);
+          el.textContent = 'Session expired - please reconnect';
+          localStorage.clear();
+          return;
+        }
+      }
+
+      try {
+        el.textContent = 'Fetching...';
+
+        // Proxy URLs - no CORS issues
+        const vehiclesRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
+          headers: { 'x-access-token': token }
+        });
+
+        if (!vehiclesRes.ok) throw new Error(`Vehicles proxy: ${vehiclesRes.status}`);
+
+        const vehicles = await vehiclesRes.json();
+        const vid = vehicles.response?.[0]?.id;
+
+        if (!vid) throw new Error('No vehicle found');
+
+        const dataRes = await fetch(`https://tesla-callback.theshadowalker.com/api/tesla/vehicles/${vid}/vehicle_data`, {
+          headers: { 'x-access-token': token }
+        });
+
+        if (!dataRes.ok) throw new Error(`Data proxy: ${dataRes.status}`);
+
+        const data = await dataRes.json();
+        const miles = data.response.vehicle_state.odometer;
+
+        el.textContent = `${miles.toFixed(1)} miles`;
+      } catch (err) {
+        console.error('Fetch error:', err);
+        el.textContent = 'Error loading mileage';
+      }
+    }
+
+    // Handle tokens from redirect
     window.addEventListener('load', () => {
       if (window.location.hash) {
         const params = new URLSearchParams(window.location.hash.slice(1));
@@ -40,45 +117,14 @@
           fetchMileage();
         }
       }
+
       if (localStorage.getItem('tesla_access_token')) fetchMileage();
+      else document.getElementById('mileage').textContent = 'Not connected yet';
     });
 
-    async function fetchMileage() {
-      let token = localStorage.getItem('tesla_access_token');
-      const el = document.getElementById('mileage');
-
-      if (!token) {
-        el.textContent = 'Not connected';
-        return;
-      }
-
-      try {
-        el.textContent = 'Fetching...';
-
-        const vehiclesRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
-          headers: { 'x-access-token': token }
-        });
-
-        if (!vehiclesRes.ok) throw new Error(`API error: ${vehiclesRes.status}`);
-
-        const vehicles = await vehiclesRes.json();
-        const vid = vehicles.response[0]?.id;
-        if (!vid) throw new Error('No vehicle');
-
-        const dataRes = await fetch(`https://tesla-callback.theshadowalker.com/api/tesla/vehicles/${vid}/vehicle_data`, {
-          headers: { 'x-access-token': token }
-        });
-
-        if (!dataRes.ok) throw new Error(`Data error: ${dataRes.status}`);
-
-        const data = await dataRes.json();
-        const miles = data.response.vehicle_state.odometer;
-
-        el.textContent = `${miles.toFixed(1)} miles`;
-      } catch (err) {
-        console.error('Fetch error:', err);
-        el.textContent = 'Error loading mileage';
-      }
+    function connectTesla() {
+      const authUrl = `https://auth.tesla.com/oauth2/v3/authorize?client_id=0ab7596a-006e-48d4-9b04-b165eb1ff29f&redirect_uri=https://tesla-callback.theshadowalker.com/tesla-callback&response_type=code&scope=vehicle_device_data%20offline_access&state=test123`;
+      window.location.href = authUrl;
     }
   </script>
 </body>
