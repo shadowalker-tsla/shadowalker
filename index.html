@@ -24,13 +24,13 @@
   </div>
 
   <script>
-    // Check if token is expired (5 min buffer)
+    // Check if token is near expiry (5 min buffer)
     function isTokenExpired() {
       const expires = localStorage.getItem('tesla_token_expires');
       return !expires || Date.now() > parseInt(expires, 10) - 300000;
     }
 
-    // Refresh token via Worker
+    // Refresh token via Worker (no CORS, uses secrets server-side)
     async function refreshAccessToken() {
       const rt = localStorage.getItem('tesla_refresh_token');
       if (!rt) throw new Error('No refresh token');
@@ -52,7 +52,7 @@
       return tokens.access_token;
     }
 
-    // Fetch mileage via Worker proxy
+    // Fetch mileage via Worker proxy (this eliminates CORS)
     async function fetchMileage() {
       let token = localStorage.getItem('tesla_access_token');
       const el = document.getElementById('mileage');
@@ -76,7 +76,7 @@
       try {
         el.textContent = 'Fetching...';
 
-        // Proxy URLs - no CORS issues
+        // PROXY CALLS - go to your Worker subdomain
         const vehiclesRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
           headers: { 'x-access-token': token }
         });
@@ -104,7 +104,7 @@
       }
     }
 
-    // Handle tokens from redirect
+    // Handle tokens from OAuth redirect
     window.addEventListener('load', () => {
       if (window.location.hash) {
         const params = new URLSearchParams(window.location.hash.slice(1));
@@ -118,8 +118,11 @@
         }
       }
 
-      if (localStorage.getItem('tesla_access_token')) fetchMileage();
-      else document.getElementById('mileage').textContent = 'Not connected yet';
+      if (localStorage.getItem('tesla_access_token')) {
+        fetchMileage();
+      } else {
+        document.getElementById('mileage').textContent = 'Not connected yet';
+      }
     });
 
     function connectTesla() {
