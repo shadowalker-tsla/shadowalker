@@ -30,7 +30,7 @@
       return !expires || Date.now() > parseInt(expires, 10) - 300000;
     }
 
-    // Refresh token via Worker (no CORS, uses secrets server-side)
+    // Refresh token via Worker
     async function refreshAccessToken() {
       const rt = localStorage.getItem('tesla_refresh_token');
       if (!rt) throw new Error('No refresh token');
@@ -52,7 +52,7 @@
       return tokens.access_token;
     }
 
-    // Fetch mileage via Worker proxy (this eliminates CORS)
+    // Fetch mileage via Worker proxy (this is the critical change)
     async function fetchMileage() {
       let token = localStorage.getItem('tesla_access_token');
       const el = document.getElementById('mileage');
@@ -76,12 +76,12 @@
       try {
         el.textContent = 'Fetching...';
 
-        // PROXY CALLS - go to your Worker subdomain
+        // PROXY URLs - these go to your Worker (no CORS error)
         const vehiclesRes = await fetch('https://tesla-callback.theshadowalker.com/api/tesla/vehicles', {
           headers: { 'x-access-token': token }
         });
 
-        if (!vehiclesRes.ok) throw new Error(`Vehicles proxy: ${vehiclesRes.status}`);
+        if (!vehiclesRes.ok) throw new Error(`Vehicles proxy error: ${vehiclesRes.status}`);
 
         const vehicles = await vehiclesRes.json();
         const vid = vehicles.response?.[0]?.id;
@@ -92,7 +92,7 @@
           headers: { 'x-access-token': token }
         });
 
-        if (!dataRes.ok) throw new Error(`Data proxy: ${dataRes.status}`);
+        if (!dataRes.ok) throw new Error(`Data proxy error: ${dataRes.status}`);
 
         const data = await dataRes.json();
         const miles = data.response.vehicle_state.odometer;
